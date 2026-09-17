@@ -45,8 +45,15 @@ export async function runTurn(session, cwd, promptText, handlers) {
     }
   });
 
-  // Give the model just enough context about where "here" is.
-  const contextual = `[cwd: ${cwd}]\n${promptText}`;
+  // Give the model context about where "here" is, plus the default brevity
+  // rule: at most 5 lines unless the user explicitly asks for more.
+  const contextual =
+    `[e_harness context]\n` +
+    `cwd: ${cwd}\n` +
+    `Answer in at most 5 lines. Be terse and high-level; skip preamble and ` +
+    `caveats. Only exceed 5 lines if the user's request explicitly asks for ` +
+    `more detail (e.g. "in detail", "long", "step by step", a specific line/word count).\n` +
+    `---\n${promptText}`;
   try {
     await session.prompt(contextual);
   } finally {
