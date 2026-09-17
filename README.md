@@ -2,77 +2,111 @@
 
 A **shell-first** LLM harness. The inverse of Claude Code / pi: instead of
 dropping you into a chat UI where the default is natural language and `!` escapes
-to the shell, you **stay in your shell** and everything runs as a normal command —
-until a line starts with `\`, which is sent to the agent.
+to the shell, you **stay in your own zsh** and everything runs as a normal
+command — until a line starts with `\ ` (backslash + space), which is sent to
+the agent instead.
 
 The agent never takes over the screen. It answers **inline, in a colored box**,
-right where you are in the terminal, so the whole transcript (including any
-commands the agent ran) stays in your normal scrollback — selectable and
-auditable exactly as if you had typed it.
+right where you are, so the whole transcript (including any commands the agent
+ran) stays in your normal scrollback — selectable and auditable as if you typed
+it.
 
 ```
 ~/projects/e_harness ❯ ls
-bin  node_modules  package.json  src
-~/projects/e_harness ❯ git status --short
- M src/index.mjs
+bin  node_modules  package.json  README.md  shell  src
 ~/projects/e_harness ❯ \ what changed in this repo and is it safe to commit?
   ⟳ git diff --stat
-    src/index.mjs | 12 +++++---
+    src/daemon.mjs | 12 +++++---
 ╭─ ai ─────────────────────────────────────────────────────────╮
-│ Only src/index.mjs changed (REPL loop tweaks). No secrets or  │
-│ generated files are staged — safe to commit.                  │
+│ Only src/daemon.mjs changed. No secrets or generated files    │
+│ are staged — safe to commit.                                  │
 ╰───────────────────────────────────────────────────────────────╯
 ~/projects/e_harness ❯
 ```
 
-## Design
+## Why this design
 
-| Concern              | Behaviour                                                            |
-|----------------------|---------------------------------------------------------------------|
-| Normal input         | Runs verbatim in a **persistent shell** (`cd`, `export`, vars persist) |
-| `\ <prompt>`         | Sent to the agent; high-level answer printed in a colored box        |
-| Agent shell commands | Printed inline as `⟳ <cmd>` (auditable, as if you typed them)         |
-| Screen               | Never cleared / no alternate screen — pure inline scrollback         |
-| `\exit` / Ctrl+D     | Quit                                                                  |
-| Ctrl+C               | Abort the current agent turn (or interrupt the running command)      |
+Earlier versions wrapped your input in a Node REPL. That broke everything that
+makes a shell a shell: **tab-completion, `clear`, your prompt theme, Ctrl-R,
+keybindings** — none of it worked, because you weren't actually in zsh.
 
-Reasoning/thinking is intentionally suppressed (`thinkingLevel: "off"`) so the
-box shows a **high-level result**, not a reasoning dump.
+So e_harness **gets out of the input path completely**. Your real zsh runs
+natively on your real TTY. The only addition is a single ZLE `accept-line`
+widget that fires **just** on `\ `-prefixed lines. Consequences:
 
-## Layout
+- **Tab completion, `clear`, prompt, history, keybindings** — all 100% native,
+  because nothing is intercepting them.
+- **Your prompt is exactly your prompt.** The launcher loads your real
+  `~/.zshrc` (and restores `$ZDOTDIR`); the recommended install is literally one
+  `source` line in your own config, which is byte-for-byte identical to normal.
+- **`\ ` doesn't collide** with zsh's alias-bypass idiom: `\ls` and `\rm` still
+  run the real command (alias expansion suppressed) exactly as before. Only
+  backslash-*space* is the AI trigger.
+
+## Architecture
 
 ```
-projects/e_harness/
-├── bin/eh.mjs        # executable entry
-├── src/
-│   ├── index.mjs     # REPL: shell vs. '\' routing, inline rendering
-│   ├── shell.mjs     # persistent shell (streamed output + exit codes)
-│   ├── agent.mjs     # pi agent SDK glue (runs headless, streams events)
-│   └── box.mjs       # ANSI colors + colored-box renderer
-└── package.json
+your real zsh ──(ZLE widget on "\ ")──> eh-ask (client) ──unix socket──> daemon
+     │                                        │                             │
+ native prompt/completion/clear/…      prints colored box            one long-lived
+ everything else runs in zsh           to your terminal              pi agent session
 ```
 
-Built on the pi agent SDK (`@earendil-works/pi-coding-agent`) — it reuses your
-existing pi models, auth, and tools, but with none of pi's interactive UI.
+- **`shell/e_harness.zsh`** — the ZLE widget. Chains to the previous
+  `accept-line` (so zsh-autosuggestions / syntax-highlighting keep working) and
+  only rewrites the buffer when it starts with `\ `.
+- **`src/daemon.mjs`** — one persistent pi agent session behind a unix socket,
+  so conversation state persists across queries. Never touches your terminal.
+- **`src/ask.mjs`** — tiny client the widget calls; streams events and renders
+  the box. Auto-starts the daemon if it isn't running.
+- **`src/agent.mjs` / `src/box.mjs`** — pi SDK glue and the colored-box renderer.
+- **`bin/eh.mjs`** — launcher: ensures the daemon is up and execs your real zsh
+  with the integration loaded.
 
-## Run
+## Install / run
 
-Requires Node ≥ 22 (uses ESM + top-level await; no build step).
+Requires Node ≥ 22 and zsh.
 
 ```bash
 cd projects/e_harness
 npm link @earendil-works/pi-coding-agent   # reuse the globally-installed pi
-node src/index.mjs                         # or: ./bin/eh.mjs
 ```
 
-Model/API keys are resolved from your pi config (`~/.pi/agent/auth.json`,
-env vars, etc.), same as pi itself.
+**Option A — one line in your own zsh (guaranteed-identical shell):**
+
+```zsh
+# ~/.zshrc  (add near the end, after other plugins)
+source /abs/path/to/projects/e_harness/shell/e_harness.zsh
+```
+
+Now `\ <prompt>` works in every zsh you open. The daemon auto-starts on first use.
+
+**Option B — launch a ready-made subshell (no config edit):**
+
+```bash
+node bin/eh.mjs        # or ./bin/eh.mjs, or `npm start`
+```
+
+Drops you into your real zsh with the integration loaded; `exit` to leave.
+
+Stop the background agent: `node bin/eh.mjs --stop` (or `npm run stop`).
+
+Model/API keys come from your pi config (`~/.pi/agent/auth.json`, env vars, …).
+
+## Usage
+
+| You type                         | What happens                                        |
+|----------------------------------|-----------------------------------------------------|
+| `git status`                     | runs in your real zsh (completion, prompt, all native) |
+| `\ls`                            | native zsh alias-bypass — **not** the AI            |
+| `\ explain this error`           | sent to the agent; answer in a colored box          |
+| Ctrl-C during a `\ ` turn        | aborts the agent turn                               |
+| `exit`                           | leaves the `eh` subshell (Option B)                 |
 
 ## Notes & limitations
 
-- The persistent shell is non-interactive, so full-screen TUIs launched *inside*
-  a command (`vim`, `less`, `top`) won't render well. Run those in a normal shell.
-- Aliases from your interactive rc files are not loaded (non-interactive shell).
-- The agent's built-in `bash` tool has its own working directory fixed at
-  startup; the current shell `cwd` is passed to the model as context so it can
-  use absolute paths or `cd` as needed.
+- The agent's own `bash` tool (when it runs commands for you) executes in the
+  daemon with a fixed working directory; your live `cwd` is passed as context so
+  it uses absolute paths / `cd` as needed.
+- Only interactive `~/.zshenv` and `~/.zshrc` are loaded by the `eh` launcher
+  (non-login). Option A is unaffected — it's your real shell.
