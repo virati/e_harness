@@ -1,7 +1,26 @@
 // Thin wrapper around the pi agent SDK. Runs the agent headlessly (no pi TUI,
 // no interactive chat takeover) and exposes a single runTurn() that streams
 // high-level events back to the REPL for inline rendering.
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  SessionManager,
+  AuthStorage,
+  ModelRegistry,
+} from "@earendil-works/pi-coding-agent";
+
+// Small/fast model for describe-to-command (Ctrl-X Ctrl-G). Resolved lazily and
+// cached; falls back to the session default if unavailable for this account.
+let _fastModel;
+function fastModel() {
+  if (_fastModel !== undefined) return _fastModel;
+  try {
+    const registry = ModelRegistry.create(AuthStorage.create());
+    _fastModel = registry.find("anthropic", "claude-haiku-4-5") ?? null;
+  } catch {
+    _fastModel = null;
+  }
+  return _fastModel;
+}
 
 export async function createHarness(cwd) {
   const { session, modelFallbackMessage } = await createAgentSession({
@@ -16,8 +35,10 @@ export async function createHarness(cwd) {
 // A separate, tool-less, stateless session used only to translate a natural
 // language description into a single shell command.
 export async function createCommandSession(cwd) {
+  const model = fastModel();
   const { session } = await createAgentSession({
     cwd,
+    ...(model ? { model } : {}),
     tools: [], // no tools: this is pure text generation, and it must be fast
     thinkingLevel: "off",
     sessionManager: SessionManager.inMemory(),
