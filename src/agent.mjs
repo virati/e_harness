@@ -13,6 +13,65 @@ export async function createHarness(cwd) {
   return { session, modelFallbackMessage };
 }
 
+// A separate, tool-less, stateless session used only to translate a natural
+// language description into a single shell command.
+export async function createCommandSession(cwd) {
+  const { session } = await createAgentSession({
+    cwd,
+    tools: [], // no tools: this is pure text generation, and it must be fast
+    thinkingLevel: "off",
+    sessionManager: SessionManager.inMemory(),
+  });
+  return session;
+}
+
+// Translate `desc` into one shell command line. Stateless (history is reset
+// each call) so previous queries never leak into the result.
+export async function generateCommand(session, cwd, shell, desc) {
+  session.agent.state.messages = [];
+  let out = "";
+  const unsubscribe = session.subscribe((event) => {
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+      out += event.assistantMessageEvent.delta;
+    }
+  });
+  try {
+    await session.prompt(
+      `Translate the request below into a single ${shell} command line.\n` +
+        `Output ONLY the command: no explanation, no markdown, no backticks, no leading "$".\n` +
+        `Target OS: ${process.platform}. Current directory: ${cwd}.\n\n` +
+        `Request: ${desc}`
+    );
+  } finally {
+    unsubscribe();
+  }
+  return cleanCommand(out);
+}
+
+function cleanCommand(s) {
+  let t = (s || "").trim();
+  // strip a fenced code block
+  t = t.replace(/^```[a-zA-Z0-9]*\s*/, "").replace(/\s*```$/, "").trim();
+  // strip surrounding single backticks
+  if (t.startsWith("`") && t.endsWith("`")) t = t.slice(1, -1).trim();
+  // strip a leading shell prompt marker
+  t = t.replace(/^\$\s+/, "");
+  // collapse to the command only if the model added trailing prose lines:
+  // keep everything if it looks like a single logical command (incl. pipes,
+  // && and line continuations), else take the first non-empty line.
+  const lines = t.split("\n").filter((l) => l.trim() !== "");
+  if (lines.length > 1) {
+    const continues = /(\\|\||&&|\|\||;)\s*$/;
+    const joined = [];
+    for (const l of lines) {
+      joined.push(l);
+      if (!continues.test(l)) break;
+    }
+    t = joined.join("\n");
+  }
+  return t.trim();
+}
+
 // Run one prompt turn. `handlers` receives high-level, already-summarized events:
 //   onText(delta)        - streamed assistant answer text
 //   onCommand(cmd)       - a shell command the agent decided to run (auditable)

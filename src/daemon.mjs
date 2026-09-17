@@ -4,7 +4,7 @@
 // output. This is what lets your real zsh keep 100% of its native behavior.
 import net from "node:net";
 import fs from "node:fs";
-import { createHarness, runTurn } from "./agent.mjs";
+import { createHarness, runTurn, createCommandSession, generateCommand } from "./agent.mjs";
 import { sockPath } from "./paths.mjs";
 
 const path = sockPath();
@@ -18,6 +18,12 @@ const ready = createHarness(process.cwd())
   .catch((e) => {
     console.error("[e_harness] agent init failed:", e?.message ?? e);
   });
+
+let cmdSession = null;
+async function getCmdSession() {
+  if (!cmdSession) cmdSession = await createCommandSession(process.cwd());
+  return cmdSession;
+}
 
 let busy = false;
 
@@ -47,6 +53,18 @@ async function handle(msg, conn) {
   if (msg.type === "shutdown") {
     send(conn, { type: "bye" });
     return shutdown();
+  }
+  if (msg.type === "command") {
+    // description -> single shell command (no tools, own session, can run even
+    // while a normal '\ ' turn is streaming)
+    try {
+      const s = await getCmdSession();
+      const command = await generateCommand(s, msg.cwd || process.cwd(), msg.shell || "bash", msg.text);
+      send(conn, { type: "command_result", command });
+    } catch (e) {
+      send(conn, { type: "command_result", command: "", error: String(e?.message ?? e) });
+    }
+    return conn.end();
   }
   if (msg.type !== "prompt") return;
 

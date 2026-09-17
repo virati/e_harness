@@ -105,13 +105,28 @@ Model/API keys come from your pi config (`~/.pi/agent/auth.json`, env vars, …)
 
 ## Usage
 
-| You type                         | What happens                                        |
-|----------------------------------|-----------------------------------------------------|
-| `git status`                     | runs in your real zsh (completion, prompt, all native) |
-| `\ls`                            | native zsh alias-bypass — **not** the AI            |
-| `\ explain this error`           | sent to the agent; answer in a colored box          |
-| Ctrl-C during a `\ ` turn        | aborts the agent turn                               |
-| `exit`                           | leaves the `eh` subshell (Option B)                 |
+| You type                                  | What happens                                        |
+|-------------------------------------------|-----------------------------------------------------|
+| `git status`                              | runs in your real shell (completion, prompt, native) |
+| `\ls`                                     | native alias-bypass — **not** the AI                |
+| `\ explain this error`                    | sent to the agent; answer in a colored box          |
+| *description* + **Ctrl-X Ctrl-G**         | rewrites the line into a shell command, **not run** |
+| Ctrl-C during a `\ ` turn                 | aborts the agent turn                               |
+| `exit`                                    | leaves the `eh` subshell (Option B)                 |
+
+### Describe-to-command (Ctrl-X Ctrl-G)
+
+Type a plain-English description on the command line and press **Ctrl-X Ctrl-G**.
+It is translated into a single shell command and dropped into your editor
+**without pressing Enter** — review or edit it, then run it yourself.
+
+```
+❯ list every png changed in the last day        # type this, press Ctrl-X Ctrl-G
+❯ find . -name '*.png' -type f -mtime -1         # line is replaced; not executed
+```
+
+Generation uses a separate tool-less, stateless model call, so it is fast and
+never runs anything on its own.
 
 ## Notes & limitations
 

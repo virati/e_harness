@@ -41,4 +41,21 @@ if [[ $- == *i* ]]; then
   # with \C-j (newline == accept-line). \C-j is not remapped, so no recursion.
   bind -x '"\C-x\C-z": _eh_enter' 2>/dev/null
   bind '"\C-m": "\C-x\C-z\C-j"' 2>/dev/null
+
+  # Ctrl-X Ctrl-G: translate the current line (a plain-English description) into
+  # a shell command and put it in the editor - WITHOUT running it. Review/edit,
+  # then press Enter yourself.
+  _eh_gencmd() {
+    local desc=$READLINE_LINE
+    [[ $desc == '\'* ]] && desc=${desc#'\'} # tolerate a leading backslash
+    desc=${desc#"${desc%%[![:space:]]*}"}  # trim leading whitespace
+    [[ -z $desc ]] && return
+    local cmd
+    cmd=$("$EH_NODE" "$EH_ASK_SCRIPT" --mode command -- "$desc" 2>/dev/null)
+    if [[ -n $cmd ]]; then
+      READLINE_LINE=$cmd
+      READLINE_POINT=${#READLINE_LINE}
+    fi
+  }
+  bind -x '"\C-x\C-g": _eh_gencmd' 2>/dev/null
 fi

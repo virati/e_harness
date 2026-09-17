@@ -46,3 +46,22 @@ _eh_accept_line() {
   zle _eh_orig_accept_line
 }
 zle -N accept-line _eh_accept_line
+
+# Ctrl-X Ctrl-G: translate the current line (a plain-English description) into a
+# shell command and put it in the editor - WITHOUT running it. Review/edit, then
+# press Enter yourself.
+_eh_gencmd() {
+  local desc=$BUFFER
+  [[ $desc == '\'* ]] && desc=${desc#'\'}   # tolerate a leading backslash
+  desc=${desc##[[:space:]]#}                 # trim leading whitespace
+  [[ -z ${desc//[[:space:]]/} ]] && return
+  local cmd
+  cmd=$("$EH_NODE" "$EH_ASK_SCRIPT" --mode command -- "$desc" 2>/dev/null)
+  if [[ -n $cmd ]]; then
+    BUFFER=$cmd
+    CURSOR=${#BUFFER}
+  fi
+  zle redisplay
+}
+zle -N eh-gencmd _eh_gencmd
+bindkey '^X^G' eh-gencmd

@@ -67,7 +67,9 @@ if (arg === "--stop") {
   console.log(
     "eh            launch your shell (bash/zsh) with the '\\ ' agent integration\n" +
       "eh --stop     stop the background agent daemon\n\n" +
-      "Inside the shell: type commands normally; start a line with '\\ ' (backslash+space) to ask the agent.\n" +
+      "Inside the shell: type commands normally.\n" +
+      "  '\\ <question>'      ask the agent (answer prints in a box)\n" +
+      "  <description> + Ctrl-X Ctrl-G   turn the line into a command, inserted but NOT run\n" +
       "Or add to your rc file:\n" +
       "  bash:  source " + bashIntegration + "\n" +
       "  zsh:   source " + zshIntegration
