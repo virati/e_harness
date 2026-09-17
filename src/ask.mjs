@@ -63,6 +63,8 @@ function render(events) {
         }
         break;
       case "done": {
+        // Reset SGR before drawing the box so no earlier stream state lingers.
+        process.stdout.write(color.reset);
         if (sawTool) process.stdout.write("\n");
         const title = aborted ? "ai (aborted)" : "ai";
         const body = (m.answer || "").trim() || color.dim("(no answer)");

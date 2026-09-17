@@ -15,7 +15,8 @@ import { sockPath, daemonScript } from "../src/paths.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
-const integration = path.join(root, "shell", "e_harness.zsh");
+const zshIntegration = path.join(root, "shell", "e_harness.zsh");
+const bashIntegration = path.join(root, "shell", "e_harness.bash");
 
 const arg = process.argv[2];
 
@@ -64,41 +65,56 @@ if (arg === "--stop") {
   await stopDaemon();
 } else if (arg === "--help" || arg === "-h") {
   console.log(
-    "eh            launch your zsh with the '\\ ' agent integration\n" +
+    "eh            launch your shell (bash/zsh) with the '\\ ' agent integration\n" +
       "eh --stop     stop the background agent daemon\n\n" +
       "Inside the shell: type commands normally; start a line with '\\ ' (backslash+space) to ask the agent.\n" +
-      "Or add to ~/.zshrc:  source " + integration
+      "Or add to your rc file:\n" +
+      "  bash:  source " + bashIntegration + "\n" +
+      "  zsh:   source " + zshIntegration
   );
   process.exit(0);
 } else {
   await ensureDaemon();
 
-  // Build a temp ZDOTDIR that loads your real config verbatim, then our
-  // integration, then restores ZDOTDIR so your prompt/env are exactly normal.
-  const realZdot = process.env.ZDOTDIR || os.homedir();
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "eh-zdot-"));
+  // Launch YOUR shell so the prompt/completion/env are exactly what you always
+  // see. We load your real rc verbatim, then our integration on top.
+  const shell = process.env.SHELL || "/bin/bash";
+  const isZsh = /zsh$/.test(shell);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "eh-"));
+  const baseEnv = { ...process.env, EH_NODE: process.execPath };
 
-  fs.writeFileSync(
-    path.join(tmp, ".zshenv"),
-    `[[ -f "$EH_REAL_ZDOTDIR/.zshenv" ]] && source "$EH_REAL_ZDOTDIR/.zshenv"\n`
-  );
-  fs.writeFileSync(
-    path.join(tmp, ".zshrc"),
-    `[[ -f "$EH_REAL_ZDOTDIR/.zshrc" ]] && source "$EH_REAL_ZDOTDIR/.zshrc"\n` +
-      `source "$EH_INTEGRATION"\n` +
-      `export ZDOTDIR="$EH_REAL_ZDOTDIR"\n`
-  );
+  let cmd, args, env;
+  if (isZsh) {
+    // zsh only honors a custom rc dir via ZDOTDIR; source real config, then
+    // ours, then restore ZDOTDIR so your prompt/env are exactly normal.
+    const realZdot = process.env.ZDOTDIR || os.homedir();
+    fs.writeFileSync(
+      path.join(tmp, ".zshenv"),
+      `[[ -f "$EH_REAL_ZDOTDIR/.zshenv" ]] && source "$EH_REAL_ZDOTDIR/.zshenv"\n`
+    );
+    fs.writeFileSync(
+      path.join(tmp, ".zshrc"),
+      `[[ -f "$EH_REAL_ZDOTDIR/.zshrc" ]] && source "$EH_REAL_ZDOTDIR/.zshrc"\n` +
+        `source "$EH_INTEGRATION"\n` +
+        `export ZDOTDIR="$EH_REAL_ZDOTDIR"\n`
+    );
+    cmd = shell;
+    args = ["-i"];
+    env = { ...baseEnv, ZDOTDIR: tmp, EH_REAL_ZDOTDIR: realZdot, EH_INTEGRATION: zshIntegration };
+  } else {
+    // bash (and bash-compatible): use --rcfile to load your ~/.bashrc, then ours.
+    const rc = path.join(tmp, "rc.bash");
+    fs.writeFileSync(
+      rc,
+      `[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"\n` +
+        `source "${bashIntegration}"\n`
+    );
+    cmd = shell;
+    args = ["--rcfile", rc, "-i"];
+    env = baseEnv;
+  }
 
-  const env = {
-    ...process.env,
-    ZDOTDIR: tmp,
-    EH_REAL_ZDOTDIR: realZdot,
-    EH_INTEGRATION: integration,
-    EH_NODE: process.execPath,
-  };
-
-  const zsh = process.env.SHELL && /zsh$/.test(process.env.SHELL) ? process.env.SHELL : "zsh";
-  const child = spawn(zsh, ["-i"], { stdio: "inherit", env });
+  const child = spawn(cmd, args, { stdio: "inherit", env });
   child.on("exit", (code) => {
     try {
       fs.rmSync(tmp, { recursive: true, force: true });

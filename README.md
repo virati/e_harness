@@ -2,9 +2,9 @@
 
 A **shell-first** LLM harness. The inverse of Claude Code / pi: instead of
 dropping you into a chat UI where the default is natural language and `!` escapes
-to the shell, you **stay in your own zsh** and everything runs as a normal
-command — until a line starts with `\ ` (backslash + space), which is sent to
-the agent instead.
+to the shell, you **stay in your own shell** (bash or zsh) and everything runs as
+a normal command — until a line starts with `\ ` (backslash + space), which is
+sent to the agent instead.
 
 The agent never takes over the screen. It answers **inline, in a colored box**,
 right where you are, so the whole transcript (including any commands the agent
@@ -30,15 +30,17 @@ Earlier versions wrapped your input in a Node REPL. That broke everything that
 makes a shell a shell: **tab-completion, `clear`, your prompt theme, Ctrl-R,
 keybindings** — none of it worked, because you weren't actually in zsh.
 
-So e_harness **gets out of the input path completely**. Your real zsh runs
-natively on your real TTY. The only addition is a single ZLE `accept-line`
-widget that fires **just** on `\ `-prefixed lines. Consequences:
+So e_harness **gets out of the input path completely**. Your real shell runs
+natively on your real TTY. The only addition is a single input hook (a zsh ZLE
+`accept-line` widget, or a bash readline `bind`) that fires **just** on
+`\ `-prefixed lines. Consequences:
 
 - **Tab completion, `clear`, prompt, history, keybindings** — all 100% native,
   because nothing is intercepting them.
-- **Your prompt is exactly your prompt.** The launcher loads your real
-  `~/.zshrc` (and restores `$ZDOTDIR`); the recommended install is literally one
-  `source` line in your own config, which is byte-for-byte identical to normal.
+- **Your prompt is exactly your prompt.** The launcher runs *your* `$SHELL` and
+  loads your real rc (bash: `~/.bashrc` via `--rcfile`; zsh: your `~/.zshrc` via
+  a temp `ZDOTDIR` that restores `$ZDOTDIR`). The recommended install is one
+  `source` line in your own config — byte-for-byte identical to normal.
 - **`\ ` doesn't collide** with zsh's alias-bypass idiom: `\ls` and `\rm` still
   run the real command (alias expansion suppressed) exactly as before. Only
   backslash-*space* is the AI trigger.
@@ -52,9 +54,12 @@ your real zsh ──(ZLE widget on "\ ")──> eh-ask (client) ──unix socke
  everything else runs in zsh           to your terminal              pi agent session
 ```
 
-- **`shell/e_harness.zsh`** — the ZLE widget. Chains to the previous
+- **`shell/e_harness.zsh`** — the zsh ZLE widget. Chains to the previous
   `accept-line` (so zsh-autosuggestions / syntax-highlighting keep working) and
   only rewrites the buffer when it starts with `\ `.
+- **`shell/e_harness.bash`** — the bash equivalent: an `_eh_enter` readline
+  function (bound via a macro on Enter) that rewrites the line only when it
+  starts with `\ `.
 - **`src/daemon.mjs`** — one persistent pi agent session behind a unix socket,
   so conversation state persists across queries. Never touches your terminal.
 - **`src/ask.mjs`** — tiny client the widget calls; streams events and renders
@@ -72,14 +77,18 @@ cd projects/e_harness
 npm link @earendil-works/pi-coding-agent   # reuse the globally-installed pi
 ```
 
-**Option A — one line in your own zsh (guaranteed-identical shell):**
+**Option A — one line in your own rc (guaranteed-identical shell):**
 
+```bash
+# ~/.bashrc  (bash)
+source /abs/path/to/projects/e_harness/shell/e_harness.bash
+```
 ```zsh
-# ~/.zshrc  (add near the end, after other plugins)
+# ~/.zshrc   (zsh, add after other plugins)
 source /abs/path/to/projects/e_harness/shell/e_harness.zsh
 ```
 
-Now `\ <prompt>` works in every zsh you open. The daemon auto-starts on first use.
+Now `\ <prompt>` works in every shell you open. The daemon auto-starts on first use.
 
 **Option B — launch a ready-made subshell (no config edit):**
 
@@ -87,7 +96,8 @@ Now `\ <prompt>` works in every zsh you open. The daemon auto-starts on first us
 node bin/eh.mjs        # or ./bin/eh.mjs, or `npm start`
 ```
 
-Drops you into your real zsh with the integration loaded; `exit` to leave.
+Drops you into your real `$SHELL` (bash or zsh) with the integration loaded and
+your exact prompt; `exit` to leave.
 
 Stop the background agent: `node bin/eh.mjs --stop` (or `npm run stop`).
 
