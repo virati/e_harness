@@ -1,0 +1,16 @@
+{
+  "name": "e_harness",
+  "version": "0.1.0",
+  "description": "A shell-first LLM harness: stay in your shell; prefix a line with '\\' to ask the agent, answer prints inline in a colored box.",
+  "engines": { "node": ">=22" },
+  "type": "module",
+  "bin": {
+    "eh": "./bin/eh.mjs"
+  },
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.3"
+  }
+}
