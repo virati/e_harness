@@ -63,6 +63,43 @@ async function stopDaemon() {
 
 if (arg === "--stop") {
   await stopDaemon();
+} else if (arg === "--doctor") {
+  // A plugin manager clones the repo but does not install its node dependency,
+  // so "it just does nothing" is the failure people actually hit. Name it.
+  let ok = true;
+  const line = (good, label, detail) => {
+    if (!good) ok = false;
+    console.log(`${good ? " ok " : "FAIL"}  ${label}${detail ? "  " + detail : ""}`);
+  };
+
+  const major = Number(process.versions.node.split(".")[0]);
+  line(major >= 22, "node >= 22", `found ${process.versions.node} (${process.execPath})`);
+
+  // The SDK is ESM-only: its package "exports" has no "require" condition, so
+  // createRequire().resolve() reports a false failure. Resolve it as ESM.
+  let sdk = null;
+  try {
+    sdk = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+  } catch {}
+  line(!!sdk, "pi SDK resolvable", sdk || "not installed for this checkout");
+
+  line(fs.existsSync(path.join(root, "shell", "e_harness.zsh")), "shell integration present", root);
+
+  const running = await ping();
+  console.log(`${running ? " ok " : " -- "}  daemon ${running ? "running" : "not running (starts on first use)"}  ${sockPath()}`);
+
+  const id = process.env.EH_TERM_ID;
+  console.log(`${id ? " ok " : "FAIL"}  EH_TERM_ID  ${id || "not set - the integration is not loaded in this shell"}`);
+  if (!id) ok = false;
+
+  if (!sdk) {
+    console.log(
+      `\nFix: the SDK is a peer of this checkout, not a bundled dependency.\n` +
+        `  cd ${root} && npm link @earendil-works/pi-coding-agent   # reuse a global pi\n` +
+        `  cd ${root} && npm install                                # or install it here`
+    );
+  }
+  process.exit(ok ? 0 : 1);
 } else if (arg === "--log" || arg === "--history") {
   // Where THIS terminal's record lives. Every event is appended to it as it
   // happens, so `tail -f` on it follows a turn live.
@@ -80,7 +117,8 @@ if (arg === "--stop") {
   console.log(
     "eh                 launch your shell (bash/zsh) with the agent integration\n" +
       "eh --stop          stop the background agent daemon\n" +
-      "eh --log           print the path to THIS terminal's event log\n\n" +
+      "eh --log           print the path to THIS terminal's event log\n" +
+      "eh --doctor        check node, the pi SDK, the daemon and this shell\n\n" +
       "Inside the shell: type commands normally.\n" +
       "  '\\ <question>'    ask the READ-ONLY agent (read/grep/find/ls; cannot act)\n" +
       "  '\\! <request>'    ask the ACTING agent (bash/edit/write, each needs your y/n)\n" +

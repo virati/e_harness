@@ -148,7 +148,41 @@ cd projects/e_harness
 npm link @earendil-works/pi-coding-agent   # reuse the globally-installed pi
 ```
 
-**Option A — one line in your own rc (guaranteed-identical shell):**
+**Option A — as a zsh plugin (recommended for zsh).** The repo root has an
+`e_harness.plugin.zsh`, which is the file every manager looks for:
+
+```zsh
+zinit light virati/e_harness                  # zinit
+antidote bundle virati/e_harness              # antidote
+zgenom load virati/e_harness                  # zgenom
+antigen bundle virati/e_harness               # antigen
+```
+```zsh
+# oh-my-zsh: clone into $ZSH_CUSTOM/plugins, then add it to plugins=()
+git clone https://github.com/virati/e_harness "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/e_harness"
+plugins=(... e_harness)
+```
+```toml
+# sheldon (~/.config/sheldon/plugins.toml)
+[plugins.e_harness]
+github = "virati/e_harness"
+```
+
+Load it **after** zsh-autosuggestions and zsh-syntax-highlighting, so the
+`accept-line` chain ends up in the right order.
+
+A plugin manager clones the repo but does **not** install its node dependency,
+so do that once after the first load and check it:
+
+```zsh
+cd <the cloned dir>; npm link @earendil-works/pi-coding-agent   # or: npm install
+eh-doctor        # node, SDK, daemon, and whether this shell has the integration
+```
+
+`eh-doctor` is defined by the plugin and prints the exact fix for whatever is
+missing.
+
+**Option B — one line in your own rc (guaranteed-identical shell):**
 
 ```bash
 # ~/.bashrc  (bash) — source AFTER fzf/atuin/ble.sh; see the caveat below
@@ -162,7 +196,7 @@ source /abs/path/to/projects/e_harness/shell/e_harness.zsh
 Now both triggers work in every shell you open. The daemon auto-starts on first
 use.
 
-**Option B — launch a ready-made subshell (no config edit):**
+**Option C — launch a ready-made subshell (no config edit):**
 
 ```bash
 node bin/eh.mjs        # or ./bin/eh.mjs, or `npm start`
@@ -175,6 +209,7 @@ prompt; `exit` to leave.
 |---|---|
 | `node bin/eh.mjs --stop` | stop the background agent |
 | `node bin/eh.mjs --log` | path to this terminal's event log |
+| `node bin/eh.mjs --doctor` | check node, the pi SDK, the daemon and this shell |
 
 Model/API keys come from your pi config (`~/.pi/agent/auth.json`, env vars, …).
 
