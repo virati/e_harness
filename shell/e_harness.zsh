@@ -6,9 +6,11 @@
 #     source /path/to/e_harness/shell/e_harness.zsh
 #
 # It leaves your shell completely untouched - same prompt, same completion,
-# same keybindings - and only adds one behavior: when you press Enter on a
-# line that starts with '\ ' (backslash + space), that line is sent to the
-# agent instead of the shell, and the answer is printed inline in a colored box.
+# same keybindings - and only adds two triggers on Enter:
+#
+#     \ <question>    ask the READ-ONLY agent (read/grep/find/ls only)
+#     \! <request>    ask the ACTING agent (can run commands and change files,
+#                     but asks you y/n before each one)
 #
 # The trigger is backslash-SPACE, not a bare backslash, specifically so it does
 # NOT collide with zsh's alias-bypass idiom (e.g. `\ls`, `\rm` still run the
@@ -23,8 +25,19 @@
   export EH_ASK_SCRIPT="$root/src/ask.mjs"
 }
 
-# The actual client call. Kept as a function so history shows a clean line.
-eh-ask() { "$EH_NODE" "$EH_ASK_SCRIPT" -- "$@" }
+# Identity of THIS terminal: its tty plus this shell's pid. Everything the
+# agent does here - conversation, autofill history, the event log - is filed
+# under this id and is invisible to every other terminal.
+#
+# Recomputed on every source, never inherited: a terminal launched from another
+# shell must not adopt its parent's id. A subshell does not re-source this file,
+# so it keeps the exported value - which is right, it IS the same terminal.
+export EH_TERM_ID="${${${TTY#/dev/}//\//-}:-notty}-$$"
+
+# The client calls. Kept as functions so history shows a clean line, and so you
+# can see at a glance which mode a past line used.
+eh-ask() { "$EH_NODE" "$EH_ASK_SCRIPT" --mode ask -- "$@" }
+eh-do()  { "$EH_NODE" "$EH_ASK_SCRIPT" --mode act -- "$@" }
 
 # Preserve whatever accept-line currently is (builtin or a plugin's wrapper)
 # so we chain to it instead of clobbering it.
@@ -34,14 +47,23 @@ if [[ ${widgets[accept-line]} != user:_eh_accept_line ]]; then
 fi
 
 _eh_accept_line() {
+  # extendedglob is what makes `[[:space:]]#` mean "zero or more spaces";
+  # localoptions confines it to this function so your own options are untouched.
+  setopt localoptions extendedglob
   # Trigger only on backslash followed by whitespace, so `\ls` / `\rm` (zsh
-  # alias-bypass) keep working untouched.
-  if [[ $BUFFER == '\'[[:space:]]* ]]; then
-    local q=${BUFFER#'\'}
-    q=${q##[[:space:]]}
-    if [[ -n $q ]]; then
-      BUFFER="eh-ask ${(qq)q}"
-    fi
+  # alias-bypass) keep working untouched. `\!` is checked first because `\ `
+  # would otherwise not match it anyway - they are distinct prefixes.
+  local fn q
+  if [[ $BUFFER == '\!'[[:space:]]* ]]; then
+    fn=eh-do; q=${BUFFER#'\!'}
+  elif [[ $BUFFER == '\'[[:space:]]* ]]; then
+    fn=eh-ask; q=${BUFFER#'\'}
+  fi
+  if [[ -n $fn ]]; then
+    q=${${q##[[:space:]]#}%%[[:space:]]#}
+    # (qq) single-quotes: single quotes also suppress zsh history expansion,
+    # so a '!' anywhere in the question stays literal.
+    [[ -n $q ]] && BUFFER="$fn ${(qq)q}"
   fi
   zle _eh_orig_accept_line
 }
@@ -51,16 +73,24 @@ zle -N accept-line _eh_accept_line
 # shell command and put it in the editor - WITHOUT running it. Review/edit, then
 # press Enter yourself.
 _eh_gencmd() {
+  setopt localoptions extendedglob
   local desc=$BUFFER
-  [[ $desc == '\'* ]] && desc=${desc#'\'}   # tolerate a leading backslash
-  desc=${desc##[[:space:]]#}                 # trim leading whitespace
+  desc=${desc#'\!'}                          # tolerate either trigger prefix
+  desc=${desc#'\'}
+  desc=${${desc##[[:space:]]#}%%[[:space:]]#}
   [[ -z ${desc//[[:space:]]/} ]] && return
-  local cmd
-  cmd=$("$EH_NODE" "$EH_ASK_SCRIPT" --mode command -- "$desc" 2>/dev/null)
+  local cmd err
+  err=$(mktemp)
+  cmd=$("$EH_NODE" "$EH_ASK_SCRIPT" --mode command -- "$desc" 2>"$err")
   if [[ -n $cmd ]]; then
+    # Keep the description recallable: it goes into history, so Up gets it back.
+    print -s -- "$desc"
     BUFFER=$cmd
     CURSOR=${#BUFFER}
+  else
+    zle -M "e_harness: $(<"$err")"
   fi
+  command rm -f "$err"
   zle redisplay
 }
 zle -N eh-gencmd _eh_gencmd

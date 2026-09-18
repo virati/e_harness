@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { sockPath, daemonScript } from "../src/paths.mjs";
+import { sockPath, daemonScript, stateDir, termDir } from "../src/paths.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -63,13 +63,30 @@ async function stopDaemon() {
 
 if (arg === "--stop") {
   await stopDaemon();
+} else if (arg === "--log" || arg === "--history") {
+  // Where THIS terminal's record lives. Every event is appended to it as it
+  // happens, so `tail -f` on it follows a turn live.
+  const id = process.env.EH_TERM_ID;
+  if (!id) {
+    console.error(
+      "e_harness: EH_TERM_ID is not set, so this shell has no terminal record.\n" +
+        "Source the integration (see `eh --help`) or run `eh` first."
+    );
+    process.exit(1);
+  }
+  console.log(path.join(termDir(id), "events.jsonl"));
+  process.exit(0);
 } else if (arg === "--help" || arg === "-h") {
   console.log(
-    "eh            launch your shell (bash/zsh) with the '\\ ' agent integration\n" +
-      "eh --stop     stop the background agent daemon\n\n" +
+    "eh                 launch your shell (bash/zsh) with the agent integration\n" +
+      "eh --stop          stop the background agent daemon\n" +
+      "eh --log           print the path to THIS terminal's event log\n\n" +
       "Inside the shell: type commands normally.\n" +
-      "  '\\ <question>'      ask the agent (answer prints in a box)\n" +
-      "  <description> + Ctrl-X Ctrl-G   turn the line into a command, inserted but NOT run\n" +
+      "  '\\ <question>'    ask the READ-ONLY agent (read/grep/find/ls; cannot act)\n" +
+      "  '\\! <request>'    ask the ACTING agent (bash/edit/write, each needs your y/n)\n" +
+      "  <description> + Ctrl-X Ctrl-G   turn the line into a command, inserted but NOT run\n\n" +
+      "Each terminal gets its own conversation, autofill history and event log,\n" +
+      "under " + stateDir() + "/terminals/<tty>-<pid>/\n\n" +
       "Or add to your rc file:\n" +
       "  bash:  source " + bashIntegration + "\n" +
       "  zsh:   source " + zshIntegration
