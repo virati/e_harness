@@ -39,6 +39,12 @@ export EH_TERM_ID="${${${TTY#/dev/}//\//-}:-notty}-$$"
 eh-ask() { "$EH_NODE" "$EH_ASK_SCRIPT" --mode ask -- "$@" }
 eh-do()  { "$EH_NODE" "$EH_ASK_SCRIPT" --mode act -- "$@" }
 
+# Async '\ ' and the floating answer box. Optional: without it everything below
+# still works, just blocking and inline.
+if [[ -r ${${(%):-%x}:A:h}/e_harness-async.zsh ]]; then
+  source ${${(%):-%x}:A:h}/e_harness-async.zsh
+fi
+
 # Preserve whatever accept-line currently is (builtin or a plugin's wrapper)
 # so we chain to it instead of clobbering it.
 if [[ ${widgets[accept-line]} != user:_eh_accept_line ]]; then
@@ -53,17 +59,28 @@ _eh_accept_line() {
   # Trigger only on backslash followed by whitespace, so `\ls` / `\rm` (zsh
   # alias-bypass) keep working untouched. `\!` is checked first because `\ `
   # would otherwise not match it anyway - they are distinct prefixes.
-  local fn q
+  local fn mode q
   if [[ $BUFFER == '\!'[[:space:]]* ]]; then
-    fn=eh-do; q=${BUFFER#'\!'}
+    fn=eh-do; mode=act; q=${BUFFER#'\!'}
   elif [[ $BUFFER == '\'[[:space:]]* ]]; then
-    fn=eh-ask; q=${BUFFER#'\'}
+    fn=eh-ask; mode=ask; q=${BUFFER#'\'}
   fi
   if [[ -n $fn ]]; then
     q=${${q##[[:space:]]#}%%[[:space:]]#}
-    # (qq) single-quotes: single quotes also suppress zsh history expansion,
-    # so a '!' anywhere in the question stays literal.
-    [[ -n $q ]] && BUFFER="$fn ${(qq)q}"
+    if [[ -n $q ]]; then
+      # '\ ' goes to the background and the prompt comes straight back. '\! '
+      # does not: it has to ask y/n before each command it runs, and those
+      # questions have to arrive while you are still thinking about the request.
+      if [[ $mode == ask && $EH_ASYNC != 0 ]] && (( $+functions[_eh_async_start] )); then
+        print -rs -- "$BUFFER"         # -r: without it print eats the leading backslash
+        _eh_async_start ask "$q"
+        BUFFER=""
+      else
+        # (qq) single-quotes: single quotes also suppress zsh history expansion,
+        # so a '!' anywhere in the question stays literal.
+        BUFFER="$fn ${(qq)q}"
+      fi
+    fi
   fi
   zle _eh_orig_accept_line
 }
@@ -84,7 +101,7 @@ _eh_gencmd() {
   cmd=$("$EH_NODE" "$EH_ASK_SCRIPT" --mode command -- "$desc" 2>"$err")
   if [[ -n $cmd ]]; then
     # Keep the description recallable: it goes into history, so Up gets it back.
-    print -s -- "$desc"
+    print -rs -- "$desc"
     BUFFER=$cmd
     CURSOR=${#BUFFER}
   else

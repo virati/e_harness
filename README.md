@@ -54,6 +54,61 @@ answer:
 model as an error telling it to stop rather than route around you. The prompt is
 read from `/dev/tty`, so it works regardless of what stdin is.
 
+## Asking without blocking
+
+`\ ` does not hold your terminal. The query runs as a detached background job,
+your prompt comes straight back, and you keep working — run commands, edit a
+line, use history — while it thinks. When the answer lands it is drawn in a box
+at the **top right**, using absolute cursor positioning between a save/restore,
+so the line editor never sees it and whatever you are typing is untouched.
+
+```
+~/repo ❯ \ why does the build warn about peer deps?    ← Enter, prompt returns
+~/repo ❯ git status                     ╭─ ai ──────────────────────╮
+On branch main                          │ react 19 is hoisted but   │
+nothing to commit                       │ three plugins still pin   │
+~/repo ❯ npm test                       │ ^18. Nothing breaks; the  │
+                                        │ warning is from the 18/19 │
+                                        ╰───────────────────────────╯
+```
+
+Picked up via zsh's `zle -F`, so there is no polling and no subshell waiting
+around. Because the watcher needs the line editor to be active, an answer that
+arrives while a long command is running is shown as soon as you are back at a
+prompt.
+
+| | |
+|---|---|
+| `Ctrl-X Ctrl-D` | dismiss the box |
+| `eh-last` | reprint the last answer inline, where you can select it |
+| `EH_FLOAT=` | `margin` (default), `tmux`, `above`, `off` |
+| `EH_ASYNC=0` | go back to blocking, inline answers |
+
+**`\! ` stays synchronous, deliberately.** It has to ask you `y/n` before every
+command it runs, and an approval prompt that appears while you are halfway
+through typing something else is exactly how people approve things they did not
+read. It keeps your terminal because it needs your attention.
+
+### What the box can and cannot be
+
+A terminal is one character grid, and e_harness does not own it — your shell
+does. That is the whole premise: completion, `clear`, your prompt and your
+keybindings are native because nothing is intercepting them. So there is no true
+floating window to put the answer in, the way a full-screen TUI (which *does*
+own the grid) can draw one anywhere.
+
+What `margin` does instead is paint into the top-right cells and restore the
+cursor, then repaint before each prompt so the box survives scrolling. It is
+honest about its limits: a command that writes into those columns will scribble
+over it until the next repaint, and a `clear` puts your prompt underneath it for
+one prompt cycle. It is meant for the 5-line answers `\ ` gives, not for reading
+an essay — that is what `eh-last` is for.
+
+If you want a box with no caveats at all, run inside **tmux**: `EH_FLOAT` picks
+`tmux` automatically there and puts the answer in a real right-hand pane, created
+with `-d` so focus stays with you. Same idea, no artifacts, because tmux actually
+does own the grid.
+
 ## Why this design
 
 Earlier versions wrapped your input in a Node REPL. That broke everything that
@@ -264,6 +319,9 @@ you don't like the result.
   is passed as context each turn and the agent is told to use absolute paths —
   and in `\! ` mode the approval box shows the resolved path, so a write aimed at
   the wrong directory is visible before it happens.
+- **bash is synchronous.** Async answers need zsh's `zle -F` file-descriptor
+  watcher, which readline has no equivalent of, so `\ ` blocks in bash exactly as
+  it did before. Everything else is the same in both shells.
 - **bash + Enter:** the bash integration remaps `\C-m`. fzf, atuin and ble.sh
   also bind `\C-m`; whichever is sourced last wins, so source this one after
   them. The zsh integration has no such problem — it chains to whatever

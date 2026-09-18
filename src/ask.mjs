@@ -20,9 +20,22 @@ const MAX_CONNECT_ATTEMPTS = 25; // ~10s, then give up instead of hanging Enter
 const argv = process.argv.slice(2);
 let mode = "ask";
 let rest = argv;
-if (rest[0] === "--mode") {
-  mode = rest[1];
-  rest = rest.slice(2);
+// --width N  render the box at a fixed width instead of the terminal width
+//            (the async renderer positions the box itself, so it decides)
+// --quiet    print only the final box, no progress lines
+let fixedWidth = 0;
+let quiet = false;
+for (;;) {
+  if (rest[0] === "--mode") {
+    mode = rest[1];
+    rest = rest.slice(2);
+  } else if (rest[0] === "--width") {
+    fixedWidth = Number(rest[1]) || 0;
+    rest = rest.slice(2);
+  } else if (rest[0] === "--quiet") {
+    quiet = true;
+    rest = rest.slice(1);
+  } else break;
 }
 const sep = rest.indexOf("--");
 const text = (sep >= 0 ? rest.slice(sep + 1) : rest).join(" ").trim();
@@ -34,7 +47,7 @@ const shellName = path.basename(process.env.SHELL || "bash");
 // terminal would land in one shared bucket, so fall back to something unique
 // rather than something shared.
 const term = process.env.EH_TERM_ID || `nosh-${process.ppid}`;
-const width = () => process.stdout.columns || 80;
+const width = () => fixedWidth || process.stdout.columns || 80;
 
 const request =
   mode === "command"
@@ -109,14 +122,14 @@ function onMsg(m, conn) {
       sawTool = true;
       // A gated call is about to show its own approval box; printing it here
       // too would read as if it had already run.
-      if (!m.gated) console.log(color.dim("  ⟳ ") + color.cyan(m.cmd));
+      if (!quiet && !m.gated) console.log(color.dim("  ⟳ ") + color.cyan(m.cmd));
       break;
     case "tool":
       sawTool = true;
-      if (!m.gated) console.log(color.dim(`  ⟳ ${m.name}${m.summary ? " " + m.summary : ""}`));
+      if (!quiet && !m.gated) console.log(color.dim(`  ⟳ ${m.name}${m.summary ? " " + m.summary : ""}`));
       break;
     case "tool_result":
-      if (m.summary) {
+      if (!quiet && m.summary) {
         const head = m.summary.split("\n").slice(0, 6);
         for (const l of head) console.log(color.gray("    " + l));
         const extra = m.summary.split("\n").length - head.length;
@@ -135,7 +148,7 @@ function onMsg(m, conn) {
       process.exit(process.exitCode || 0);
       break;
     case "done": {
-      if (sawTool) process.stdout.write("\n");
+      if (sawTool && !quiet) process.stdout.write("\n");
       const title = aborted ? "ai (aborted)" : mode === "act" ? "ai (act)" : "ai";
       const body = (m.answer || "").trim() || color.dim("(no answer)");
       console.log(box(title, body, m.error ? color.red : color.cyan, width()));
