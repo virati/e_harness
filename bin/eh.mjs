@@ -1,2 +1,181 @@
 #!/usr/bin/env node
-import "../src/index.mjs";
+// `eh` launcher.
+//
+// Drops you into YOUR real interactive zsh (identical prompt, completion,
+// keybindings) with the e_harness '\' integration loaded, and makes sure the
+// agent daemon is running. Nothing wraps your shell, so everything - clear,
+// tab-complete, Ctrl-R, your prompt theme - behaves exactly as outside.
+import { spawn } from "node:child_process";
+import net from "node:net";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { sockPath, daemonScript, stateDir, termDir } from "../src/paths.mjs";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "..");
+const zshIntegration = path.join(root, "shell", "e_harness.zsh");
+const bashIntegration = path.join(root, "shell", "e_harness.bash");
+
+const arg = process.argv[2];
+
+function ping() {
+  return new Promise((resolve) => {
+    const c = net.connect(sockPath());
+    c.on("connect", () => {
+      c.end();
+      resolve(true);
+    });
+    c.on("error", () => resolve(false));
+  });
+}
+
+async function ensureDaemon() {
+  if (await ping()) return;
+  const child = spawn(process.execPath, [daemonScript], { detached: true, stdio: "ignore" });
+  child.unref();
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 150));
+    if (await ping()) return;
+  }
+  console.error("e_harness: daemon did not come up in time (continuing anyway).");
+}
+
+async function stopDaemon() {
+  const c = net.connect(sockPath());
+  let acked = false;
+  c.on("connect", () => c.write(JSON.stringify({ type: "shutdown" }) + "\n"));
+  c.on("data", () => {
+    acked = true;
+  });
+  // exit only after the connection actually closes, so the write is flushed and
+  // the daemon has had a chance to unlink its socket
+  c.on("close", () => {
+    console.log(acked ? "e_harness: daemon stopped." : "e_harness: daemon closed.");
+    process.exit(0);
+  });
+  c.on("error", () => {
+    console.log("e_harness: daemon not running.");
+    process.exit(0);
+  });
+}
+
+if (arg === "--stop") {
+  await stopDaemon();
+} else if (arg === "--doctor") {
+  // A plugin manager clones the repo but does not install its node dependency,
+  // so "it just does nothing" is the failure people actually hit. Name it.
+  let ok = true;
+  const line = (good, label, detail) => {
+    if (!good) ok = false;
+    console.log(`${good ? " ok " : "FAIL"}  ${label}${detail ? "  " + detail : ""}`);
+  };
+
+  const major = Number(process.versions.node.split(".")[0]);
+  line(major >= 22, "node >= 22", `found ${process.versions.node} (${process.execPath})`);
+
+  // The SDK is ESM-only: its package "exports" has no "require" condition, so
+  // createRequire().resolve() reports a false failure. Resolve it as ESM.
+  let sdk = null;
+  try {
+    sdk = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+  } catch {}
+  line(!!sdk, "pi SDK resolvable", sdk || "not installed for this checkout");
+
+  line(fs.existsSync(path.join(root, "shell", "e_harness.zsh")), "shell integration present", root);
+
+  const running = await ping();
+  console.log(`${running ? " ok " : " -- "}  daemon ${running ? "running" : "not running (starts on first use)"}  ${sockPath()}`);
+
+  const id = process.env.EH_TERM_ID;
+  console.log(`${id ? " ok " : "FAIL"}  EH_TERM_ID  ${id || "not set - the integration is not loaded in this shell"}`);
+  if (!id) ok = false;
+
+  if (!sdk) {
+    console.log(
+      `\nFix: the SDK is a peer of this checkout, not a bundled dependency.\n` +
+        `  cd ${root} && npm link @earendil-works/pi-coding-agent   # reuse a global pi\n` +
+        `  cd ${root} && npm install                                # or install it here`
+    );
+  }
+  process.exit(ok ? 0 : 1);
+} else if (arg === "--log" || arg === "--history") {
+  // Where THIS terminal's record lives. Every event is appended to it as it
+  // happens, so `tail -f` on it follows a turn live.
+  const id = process.env.EH_TERM_ID;
+  if (!id) {
+    console.error(
+      "e_harness: EH_TERM_ID is not set, so this shell has no terminal record.\n" +
+        "Source the integration (see `eh --help`) or run `eh` first."
+    );
+    process.exit(1);
+  }
+  console.log(path.join(termDir(id), "events.jsonl"));
+  process.exit(0);
+} else if (arg === "--help" || arg === "-h") {
+  console.log(
+    "eh                 launch your shell (bash/zsh) with the agent integration\n" +
+      "eh --stop          stop the background agent daemon\n" +
+      "eh --log           print the path to THIS terminal's event log\n" +
+      "eh --doctor        check node, the pi SDK, the daemon and this shell\n\n" +
+      "Inside the shell: type commands normally.\n" +
+      "  '\\ <question>'    ask the READ-ONLY agent (read/grep/find/ls; cannot act)\n" +
+      "  '\\! <request>'    ask the ACTING agent (bash/edit/write, each needs your y/n)\n" +
+      "  <description> + Ctrl-X Ctrl-G   turn the line into a command, inserted but NOT run\n\n" +
+      "Each terminal gets its own conversation, autofill history and event log,\n" +
+      "under " + stateDir() + "/terminals/<tty>-<pid>/\n\n" +
+      "Or add to your rc file:\n" +
+      "  bash:  source " + bashIntegration + "\n" +
+      "  zsh:   source " + zshIntegration
+  );
+  process.exit(0);
+} else {
+  await ensureDaemon();
+
+  // Launch YOUR shell so the prompt/completion/env are exactly what you always
+  // see. We load your real rc verbatim, then our integration on top.
+  const shell = process.env.SHELL || "/bin/bash";
+  const isZsh = /zsh$/.test(shell);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "eh-"));
+  const baseEnv = { ...process.env, EH_NODE: process.execPath };
+
+  let cmd, args, env;
+  if (isZsh) {
+    // zsh only honors a custom rc dir via ZDOTDIR; source real config, then
+    // ours, then restore ZDOTDIR so your prompt/env are exactly normal.
+    const realZdot = process.env.ZDOTDIR || os.homedir();
+    fs.writeFileSync(
+      path.join(tmp, ".zshenv"),
+      `[[ -f "$EH_REAL_ZDOTDIR/.zshenv" ]] && source "$EH_REAL_ZDOTDIR/.zshenv"\n`
+    );
+    fs.writeFileSync(
+      path.join(tmp, ".zshrc"),
+      `[[ -f "$EH_REAL_ZDOTDIR/.zshrc" ]] && source "$EH_REAL_ZDOTDIR/.zshrc"\n` +
+        `source "$EH_INTEGRATION"\n` +
+        `export ZDOTDIR="$EH_REAL_ZDOTDIR"\n`
+    );
+    cmd = shell;
+    args = ["-i"];
+    env = { ...baseEnv, ZDOTDIR: tmp, EH_REAL_ZDOTDIR: realZdot, EH_INTEGRATION: zshIntegration };
+  } else {
+    // bash (and bash-compatible): use --rcfile to load your ~/.bashrc, then ours.
+    const rc = path.join(tmp, "rc.bash");
+    fs.writeFileSync(
+      rc,
+      `[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"\n` +
+        `source "${bashIntegration}"\n`
+    );
+    cmd = shell;
+    args = ["--rcfile", rc, "-i"];
+    env = baseEnv;
+  }
+
+  const child = spawn(cmd, args, { stdio: "inherit", env });
+  child.on("exit", (code) => {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+    process.exit(code ?? 0);
+  });
+}
