@@ -254,7 +254,7 @@ async function handle(msg, conn) {
   let answer = "";
   try {
     const session = await sessionFor(entry, mode, msg.cwd || process.cwd());
-    await runTurn(session, msg.cwd || process.cwd(), msg.text, mode, {
+    const result = await runTurn(session, msg.cwd || process.cwd(), msg.text, mode, {
       // `gated` tells the client an approval box is about to follow for this
       // call, so it should not first print a line that reads as if it already
       // ran. When "allow all" is on no box follows, so the line is printed.
@@ -270,6 +270,10 @@ async function handle(msg, conn) {
         entry.store.append("tool_end", { turn: turn.seq, tool: name, ok, output: summary });
         send(conn, { type: "tool_result", name, ok, summary });
       },
+      onFallback: (note) => {
+        entry.store.append("fallback", { turn: turn.seq, note });
+        send(conn, { type: "fallback", note });
+      },
       onText: (delta) => {
         answer += delta;
         // Every delta, the moment it arrives: if this process dies mid-answer
@@ -277,8 +281,9 @@ async function handle(msg, conn) {
         entry.store.append("delta", { turn: turn.seq, d: delta });
       },
     });
-    entry.store.append("answer", { turn: turn.seq, text: answer });
-    send(conn, { type: "done", answer });
+    const fallback = result?.fallback ?? null;
+    entry.store.append("answer", { turn: turn.seq, text: answer, ...(fallback ? { fallback } : {}) });
+    send(conn, { type: "done", answer, fallback });
   } catch (e) {
     const error = String(e?.message ?? e);
     entry.store.append("turn_error", { turn: turn.seq, error, partial: answer });

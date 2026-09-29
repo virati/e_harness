@@ -128,6 +128,9 @@ function onMsg(m, conn) {
       sawTool = true;
       if (!quiet && !m.gated) console.log(color.dim(`  ⟳ ${m.name}${m.summary ? " " + m.summary : ""}`));
       break;
+    case "fallback":
+      if (!quiet) console.log(color.dim(`  ⤳ ${m.note}`));
+      break;
     case "tool_result":
       if (!quiet && m.summary) {
         const head = m.summary.split("\n").slice(0, 6);
@@ -149,9 +152,12 @@ function onMsg(m, conn) {
       break;
     case "done": {
       if (sawTool && !quiet) process.stdout.write("\n");
-      const title = aborted ? "ai (aborted)" : mode === "act" ? "ai (act)" : "ai";
+      // A red box means the answer did not come from the primary model: either
+      // it errored, or it was answered by the local fallback.
+      const base = aborted ? "ai (aborted)" : mode === "act" ? "ai (act)" : "ai";
+      const title = m.fallback ? `${base} · local ${m.fallback}` : base;
       const body = (m.answer || "").trim() || color.dim("(no answer)");
-      console.log(box(title, body, m.error ? color.red : color.cyan, width()));
+      console.log(box(title, body, m.error || m.fallback ? color.red : color.cyan, width()));
       conn.end();
       process.exit(0);
     }

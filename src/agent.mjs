@@ -25,12 +25,26 @@ import {
   createBashTool,
   createEditTool,
   createWriteTool,
+  DefaultResourceLoader,
+  getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+
+// e_harness sessions load NO pi extensions. With any of the user's pi packages
+// loaded (billion-context, pi-background-tasks, ...), every Anthropic request
+// from this SDK process came back 429 "rate_limit_error: Error", while the same
+// prompt with none loaded answered at once. e_harness only exposes its own
+// tools anyway, so the extensions add nothing here. Skills, prompts and
+// AGENTS.md context still load as in pi.
+async function resourceLoaderFor(cwd) {
+  const loader = new DefaultResourceLoader({ cwd, agentDir: getAgentDir(), noExtensions: true });
+  await loader.reload();
+  return loader;
+}
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const GATED_TOOLS = ["bash", "edit", "write"];
 
-// Small/fast model for describe-to-command (Ctrl-X Ctrl-G). Resolved lazily and
+// Small/fast model for describe-to-command (Alt-E). Resolved lazily and
 // cached; falls back to the session default if unavailable for this account.
 const FAST_MODEL = process.env.EH_FAST_MODEL || "claude-haiku-4-5";
 let _fastModelPromise;
@@ -46,6 +60,41 @@ function fastModel() {
     })();
   }
   return _fastModelPromise;
+}
+
+// Local model a turn falls back to when the primary errors out with nothing to
+// show (a 429, an outage). "provider/model-id" as registered in
+// ~/.pi/agent/models.json; EH_FALLBACK_MODEL="" turns the fallback off.
+const FALLBACK_MODEL = process.env.EH_FALLBACK_MODEL ?? "lmstudio/qwen/qwen3.8-27b";
+let _fallbackModelPromise;
+function fallbackModel() {
+  if (!_fallbackModelPromise) {
+    _fallbackModelPromise = (async () => {
+      if (!FALLBACK_MODEL) return null;
+      const i = FALLBACK_MODEL.indexOf("/");
+      if (i < 0) return null;
+      try {
+        const registry = new ModelRegistry(await ModelRuntime.create());
+        return registry.find(FALLBACK_MODEL.slice(0, i), FALLBACK_MODEL.slice(i + 1)) ?? null;
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return _fallbackModelPromise;
+}
+
+// How long the primary gets to respond at all before the turn moves to the
+// fallback. 0 disables the race (fallback then only follows a hard error).
+const HANDSHAKE_MS = Number(process.env.EH_HANDSHAKE_MS ?? 5000);
+
+// The turn ended in a provider error and said nothing. pi retries internally
+// and then resolves normally with stopReason "error" - it does not throw.
+function failedSilently(session) {
+  const last = session.messages?.at(-1);
+  if (last?.role !== "assistant" || last.stopReason !== "error") return null;
+  const said = (last.content ?? []).some((c) => c.type === "text" && c.text.trim());
+  return said ? null : last.errorMessage || "provider error";
 }
 
 const truncate = (s, n) => {
@@ -125,6 +174,7 @@ function sessionManagerFor(sessionFile, cwd) {
 export async function createAskSession({ cwd, sessionFile }) {
   const { session } = await createAgentSession({
     cwd,
+    resourceLoader: await resourceLoaderFor(cwd),
     tools: READ_ONLY_TOOLS,
     thinkingLevel: "off", // keep responses high-level, not a reasoning dump
     sessionManager: sessionManagerFor(sessionFile, cwd),
@@ -137,6 +187,7 @@ export async function createAskSession({ cwd, sessionFile }) {
 export async function createActSession({ cwd, sessionFile, requestApproval }) {
   const { session } = await createAgentSession({
     cwd,
+    resourceLoader: await resourceLoaderFor(cwd),
     tools: [...READ_ONLY_TOOLS, ...GATED_TOOLS],
     customTools: [
       gate(createBashTool(cwd), requestApproval),
@@ -155,6 +206,7 @@ export async function createActSession({ cwd, sessionFile, requestApproval }) {
 export async function warmup(cwd) {
   const { session } = await createAgentSession({
     cwd,
+    resourceLoader: await resourceLoaderFor(cwd),
     tools: [],
     thinkingLevel: "off",
     sessionManager: SessionManager.inMemory(),
@@ -170,6 +222,7 @@ export async function createCommandSession({ cwd }) {
   const model = await fastModel();
   const { session } = await createAgentSession({
     cwd,
+    resourceLoader: await resourceLoaderFor(cwd),
     ...(model ? { model } : {}),
     tools: [], // no tools: this is pure text generation, and it must be fast
     thinkingLevel: "off",
@@ -235,10 +288,14 @@ function cleanCommand(s) {
 //   onTool(name, summary)- any other tool action (read/edit/write/...)
 //   onToolResult(name, ok, summary)
 export async function runTurn(session, cwd, promptText, mode, handlers) {
+  // "Handshake" = the provider's first successful response. pi pushes "start"
+  // only after the HTTP call returns OK, so a 429 being retried never counts.
+  let shook = false;
   const unsubscribe = session.subscribe((event) => {
     switch (event.type) {
       case "message_update": {
         const e = event.assistantMessageEvent;
+        if (e.type !== "error") shook = true;
         if (e.type === "text_delta") handlers.onText?.(e.delta);
         break;
       }
@@ -282,7 +339,47 @@ export async function runTurn(session, cwd, promptText, mode, handlers) {
     `more detail (e.g. "in detail", "long", "step by step", a specific line/word count).\n` +
     `---\n${promptText}`;
   try {
-    await session.prompt(contextual);
+    // No handshake within HANDSHAKE_MS: abort (this also cancels pi's own
+    // backoff-and-retry of a 429) and go to the local model right away.
+    let timedOut = false;
+    const local = await fallbackModel();
+    const timer =
+      local && HANDSHAKE_MS > 0
+        ? setTimeout(() => {
+            if (shook) return;
+            timedOut = true;
+            session.abort().catch(() => {});
+          }, HANDSHAKE_MS)
+        : null;
+    try {
+      await session.prompt(contextual);
+    } finally {
+      clearTimeout(timer);
+    }
+    const error = timedOut ? `no handshake within ${HANDSHAKE_MS / 1000}s` : failedSilently(session);
+    if (!error) return { fallback: null };
+    // Primary failed with nothing to show: rerun this turn once on the local
+    // model, then put the primary back so the next turn tries it first.
+    const primary = session.model;
+    if (!local || !primary || local === primary) throw new Error(error);
+    handlers.onFallback?.(`${primary.id}: ${truncate(error, 80)}; using ${local.id}`);
+    await session.setModel(local);
+    try {
+      // Drop the empty error/aborted replies so the prompt is the last message
+      // again and continue() answers it without adding a duplicate (same state
+      // internal generateCommand relies on).
+      const msgs = [...session.agent.state.messages];
+      while (msgs.length && msgs.at(-1).role === "assistant" && ["error", "aborted"].includes(msgs.at(-1).stopReason)) {
+        msgs.pop();
+      }
+      session.agent.state.messages = msgs;
+      await session.agent.continue();
+    } finally {
+      await session.setModel(primary).catch(() => {});
+    }
+    const again = failedSilently(session);
+    if (again) throw new Error(`${error}; fallback ${local.id}: ${again}`);
+    return { fallback: local.id };
   } finally {
     unsubscribe();
   }
