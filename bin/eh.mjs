@@ -122,7 +122,7 @@ if (arg === "--stop") {
       "Inside the shell: type commands normally.\n" +
       "  '\\ <question>'    ask the READ-ONLY agent (read/grep/find/ls; cannot act)\n" +
       "  '\\! <request>'    ask the ACTING agent (bash/edit/write, each needs your y/n)\n" +
-      "  <description> + Ctrl-X Ctrl-G   turn the line into a command, inserted but NOT run\n\n" +
+      "  <description> + Alt-E   turn the line into a command, inserted but NOT run\n\n" +
       "Each terminal gets its own conversation, autofill history and event log,\n" +
       "under " + stateDir() + "/terminals/<tty>-<pid>/\n\n" +
       "Or add to your rc file:\n" +

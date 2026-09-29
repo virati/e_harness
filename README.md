@@ -164,7 +164,7 @@ your real zsh ──(ZLE widget on "\ " / "\! ")──> ask.mjs ──unix socke
  native prompt/completion/    │            prints boxes, reads      per-terminal
  clear/… everything else      │            y/n from /dev/tty        pi sessions
  runs in zsh                  │                                            │
-                              └── Ctrl-X Ctrl-G ──────────────────> stateless
+                              └── Alt-E ──────────────────────────> stateless
                                   (insert a command, never run it)   fast model
 ```
 
@@ -195,6 +195,91 @@ loop turns into an `isError` tool result the model reads. They are marked
 you answer at.
 
 ## Install / run
+
+### Fresh system, zsh
+
+Starting from a machine with only zsh and git. Every step is one-time.
+
+**1. Install Node 22 or newer.** Use your package manager (`sudo dnf install nodejs`,
+`sudo apt install nodejs`, `brew install node`) if it ships ≥ 22, or nvm:
+
+```zsh
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+exec zsh
+nvm install 22
+node --version          # must print v22 or later
+```
+
+**2. Clone the repo and install its one dependency** (the pi agent SDK):
+
+```zsh
+git clone https://github.com/virati/e_harness ~/e_harness
+cd ~/e_harness
+npm install
+```
+
+**3. Log in to a model provider.** e_harness uses pi's credentials, and the pi CLI
+came with step 2. Run it once and log in:
+
+```zsh
+./node_modules/.bin/pi
+# inside pi:  /login   → pick a provider (e.g. Anthropic), then  /model  to choose the default
+# quit with Ctrl-C twice
+```
+
+This writes `~/.pi/agent/auth.json` and `~/.pi/agent/settings.json`. Instead of
+`/login` you can `export ANTHROPIC_API_KEY=sk-ant-...` in `~/.zshrc`.
+
+**4. Load it from `~/.zshrc`.** Add this line **after** zsh-autosuggestions and
+zsh-syntax-highlighting if you use them:
+
+```zsh
+source ~/e_harness/e_harness.plugin.zsh
+```
+
+(Or use a plugin manager, below.)
+
+**5. Open a new shell and check it:**
+
+```zsh
+exec zsh
+eh-doctor               # node, the pi SDK, the daemon, and this shell's integration
+\ hello                 # a cyan box with an answer means it works
+```
+
+The daemon starts by itself on the first `\ `. Type a description and press
+**Alt-E** to turn it into a command.
+
+**6. Optional: a local model fallback.** If the main model does not respond
+within 5 seconds, or fails, the turn is re-run on a local model and the box is
+drawn **red**. To enable it with LM Studio, load a model with **at least 32k
+context** (an e_harness turn is about 16k tokens) and register it in
+`~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "lmstudio": {
+      "baseUrl": "http://localhost:1234/v1",
+      "api": "openai-completions",
+      "apiKey": "lmstudio",
+      "models": [{ "id": "qwen/qwen3.8-27b", "contextWindow": 32768, "maxTokens": 4096 }]
+    }
+  }
+}
+```
+
+| Variable | Default | |
+|---|---|---|
+| `EH_FALLBACK_MODEL` | `lmstudio/qwen/qwen3.8-27b` | `provider/model-id` from `models.json`; `""` turns the fallback off |
+| `EH_HANDSHAKE_MS` | `5000` | how long the main model gets to respond; `0` waits for pi's own retries |
+| `EH_FAST_MODEL` | `claude-haiku-4-5` | model for Alt-E |
+
+e_harness loads **no pi extensions** (pi packages in `settings.json`), even if
+pi itself does: with them loaded, Anthropic requests from e_harness came back
+429. Skills, prompt templates and AGENTS.md still load.
+
+### Other ways to install
 
 Requires Node ≥ 22.
 
@@ -276,17 +361,17 @@ Model/API keys come from your pi config (`~/.pi/agent/auth.json`, env vars, …)
 | `\ls` | native alias-bypass — **not** the AI |
 | `\ explain this error` | read-only agent; answer in a colored box |
 | `\! fix the failing test` | acting agent; each bash/edit/write asks you first |
-| *description* + **Ctrl-X Ctrl-G** | rewrites the line into a shell command, **not run** |
+| *description* + **Alt-E** | rewrites the line into a shell command, **not run** |
 | Ctrl-C during a turn | aborts this terminal's turn only |
 
-### Describe-to-command (Ctrl-X Ctrl-G)
+### Describe-to-command (Alt-E)
 
-Type a plain-English description on the command line and press **Ctrl-X Ctrl-G**.
+Type a plain-English description on the command line and press **Alt-E**.
 It is translated into a single shell command and dropped into your editor
 **without pressing Enter** — review or edit it, then run it yourself.
 
 ```
-❯ list every png changed in the last day        # type this, press Ctrl-X Ctrl-G
+❯ list every png changed in the last day        # type this, press Alt-E
 ❯ find . -name '*.png' -type f -mtime -1         # line is replaced; not executed
 ```
 

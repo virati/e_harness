@@ -86,7 +86,7 @@ _eh_accept_line() {
 }
 zle -N accept-line _eh_accept_line
 
-# Ctrl-X Ctrl-G: translate the current line (a plain-English description) into a
+# Alt-E: translate the current line (a plain-English description) into a
 # shell command and put it in the editor - WITHOUT running it. Review/edit, then
 # press Enter yourself.
 _eh_gencmd() {
@@ -111,4 +111,4 @@ _eh_gencmd() {
   zle redisplay
 }
 zle -N eh-gencmd _eh_gencmd
-bindkey '^X^G' eh-gencmd
+bindkey '^[e' eh-gencmd

@@ -65,7 +65,7 @@ if [[ $- == *i* ]]; then
   bind -x '"\C-x\C-z": _eh_enter' 2>/dev/null
   bind '"\C-m": "\C-x\C-z\C-j"' 2>/dev/null
 
-  # Ctrl-X Ctrl-G: translate the current line (a plain-English description) into
+  # Alt-E: translate the current line (a plain-English description) into
   # a shell command and put it in the editor - WITHOUT running it. Review/edit,
   # then press Enter yourself.
   _eh_gencmd() {
@@ -86,5 +86,5 @@ if [[ $- == *i* ]]; then
     fi
     command rm -f "$err"
   }
-  bind -x '"\C-x\C-g": _eh_gencmd' 2>/dev/null
+  bind -x '"\ee": _eh_gencmd' 2>/dev/null
 fi
